@@ -1,0 +1,9 @@
+streamlit
+numpy
+jax
+jaxlib
+tensorcircuit
+optax
+ott-jax
+matplotlib
+plotly
