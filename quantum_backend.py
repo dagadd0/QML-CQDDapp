@@ -1,15 +1,12 @@
 import numpy as np
 import jax
 import jax.numpy as jnp
-import tensorcircuit as tc
+from scipy.linalg import expm
 import plotly.graph_objects as go
 
 # =====================================================
 # CONFIGURACIÓN GLOBAL
 # =====================================================
-
-tc.set_dtype("complex64")
-tc.set_backend("jax")
 
 PARAM_FILES = {
     "Cluster States": "params_clusters.npy",
@@ -24,22 +21,76 @@ MODEL_CONFIG = {
 }
 
 # =====================================================
+# MATRICES DE PAULI Y GATES CUÁNTICOS
+# =====================================================
+
+# Matrices de Pauli
+I = np.array([[1, 0], [0, 1]], dtype=np.complex64)
+X = np.array([[0, 1], [1, 0]], dtype=np.complex64)
+Y = np.array([[0, -1j], [1j, 0]], dtype=np.complex64)
+Z = np.array([[1, 0], [0, -1]], dtype=np.complex64)
+
+# Gates unitarios
+def RX(theta):
+    """Rotación alrededor del eje X"""
+    return np.array([
+        [np.cos(theta/2), -1j*np.sin(theta/2)],
+        [-1j*np.sin(theta/2), np.cos(theta/2)]
+    ], dtype=np.complex64)
+
+def RY(theta):
+    """Rotación alrededor del eje Y"""
+    return np.array([
+        [np.cos(theta/2), -np.sin(theta/2)],
+        [np.sin(theta/2), np.cos(theta/2)]
+    ], dtype=np.complex64)
+
+def RZ(theta):
+    """Rotación alrededor del eje Z"""
+    return np.array([
+        [np.exp(-1j*theta/2), 0],
+        [0, np.exp(1j*theta/2)]
+    ], dtype=np.complex64)
+
+def CZ_gate():
+    """Compuerta CZ (Control-Z)"""
+    return np.array([
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, -1]
+    ], dtype=np.complex64)
+
+# =====================================================
 # CARGA DE PARÁMETROS
 # =====================================================
 
 def load_params(distribution):
+    """Carga los parámetros entrenados del archivo .npy"""
     if distribution not in PARAM_FILES:
         raise ValueError(f"Distribución no soportada: {distribution}")
-    return jnp.array(np.load(PARAM_FILES[distribution], allow_pickle=False))
+    return np.load(PARAM_FILES[distribution], allow_pickle=False)
 
 
 # =====================================================
-# ESTADOS ALEATORIOS BLOCH
+# ESTADOS ALEATORIOS EN BLOCH
 # =====================================================
 
 def random_bloch_states(key, N):
+    """
+    Genera N estados cuánticos aleatorios uniformemente distribuidos
+    en la esfera de Bloch.
+    
+    Args:
+        key: JAX random key
+        N: número de estados
+    
+    Returns:
+        Array de shape (N, 2) con amplitudes [α, β]
+    """
     key_theta, key_phi = jax.random.split(key)
 
+    # Distribución uniforme en la esfera
     u = jax.random.uniform(key_theta, (N,))
     theta = jnp.arccos(1 - 2 * u)
 
@@ -52,92 +103,230 @@ def random_bloch_states(key, N):
 
 
 # =====================================================
-# ANCILLAS
+# OPERACIONES CON ESPACIOS TENSORIALES
 # =====================================================
 
-def add_ancilla(state, nancilla):
-    ancilla = (
-        jnp.zeros((2**nancilla,), dtype=state.dtype)
-        .at[0].set(1)
-    )
-    return jnp.kron(state, ancilla)
+def kron_product(*matrices):
+    """
+    Calcula el producto de Kronecker de múltiples matrices.
+    Equivalente a np.kron pero para múltiples matrices.
+    """
+    result = matrices[0]
+    for matrix in matrices[1:]:
+        result = np.kron(result, matrix)
+    return result
 
+def apply_single_qubit_gate(state, gate, qubit, nqubits):
+    """
+    Aplica una compuerta de un qubit a un estado.
+    
+    Args:
+        state: vector de estado de shape (2**nqubits,)
+        gate: matriz unitaria 2x2
+        qubit: índice del qubit (0 a nqubits-1)
+        nqubits: número total de qubits
+    
+    Returns:
+        estado transformado
+    """
+    # Construye la matriz total I ⊗ ... ⊗ gate ⊗ ... ⊗ I
+    matrices = []
+    for i in range(nqubits):
+        if i == qubit:
+            matrices.append(gate)
+        else:
+            matrices.append(I)
+    
+    total_matrix = kron_product(*matrices)
+    return total_matrix @ state
 
-batched_addancilla = jax.vmap(
-    add_ancilla,
-    in_axes=(0, None)
-)
+def apply_two_qubit_gate(state, gate, qubit1, qubit2, nqubits):
+    """
+    Aplica una compuerta de dos qubits (como CZ).
+    
+    Args:
+        state: vector de estado
+        gate: matriz unitaria 4x4
+        qubit1, qubit2: índices de qubits
+        nqubits: número total de qubits
+    
+    Returns:
+        estado transformado
+    """
+    # Asegura que qubit1 < qubit2
+    if qubit1 > qubit2:
+        qubit1, qubit2 = qubit2, qubit1
+    
+    # Reordena qubits para aplicar la compuerta en los primeros 2 qubits
+    # (simplificado: asume qubits adyacentes)
+    matrices = []
+    for i in range(nqubits):
+        if i < qubit1 or i > qubit2:
+            matrices.append(I)
+        elif i == qubit1:
+            continue  # Manejado por la compuerta de 2 qubits
+        elif i == qubit2:
+            continue  # Manejado por la compuerta de 2 qubits
+    
+    # Versión simplificada: construye matriz de permutación
+    # Para mayor precisión, usar librería más avanzada
+    total_matrix = kron_product(*([I] * qubit1 + [gate] + [I] * (nqubits - qubit2 - 1)))
+    return total_matrix @ state
 
 
 # =====================================================
 # MEDICIÓN DE ANCILLAS
 # =====================================================
 
-def measure_ancillas_single(key, state, na, n):
-    reshaped = jnp.reshape(state, (2**n, 2**na))
-    probs = jnp.sum(jnp.abs(reshaped) ** 2, axis=0)
-
-    key, subkey = jax.random.split(key)
-    m_res = jax.random.categorical(subkey, jnp.log(probs + 1e-12))
-
-    post_state = reshaped[:, m_res]
-    norm = jnp.linalg.norm(post_state)
-
-    return post_state / (norm + 1e-12)
+def measure_ancillas_classical(state, nancilla, ndataq):
+    """
+    Realiza medición proyectiva en las ancillas y retorna estado colapsado.
+    
+    Args:
+        state: vector de estado completo de shape (2**nqubits,)
+        nancilla: número de ancillas
+        ndataq: número de qubits de datos
+    
+    Returns:
+        estado de datos post-medición de shape (2**ndataq,)
+    """
+    nqubits = nancilla + ndataq
+    
+    # Reshape: datos × ancillas
+    reshaped = state.reshape((2**ndataq, 2**nancilla))
+    
+    # Calcula probabilidades de medir cada resultado de ancilla
+    probs = np.sum(np.abs(reshaped) ** 2, axis=0)
+    probs = probs / np.sum(probs)  # Normaliza
+    
+    # Elige resultado de medición (determinístico en simulación: máx probabilidad)
+    m_result = np.argmax(probs)
+    
+    # Obtiene estado de datos post-colapso
+    post_state = reshaped[:, m_result]
+    post_state = post_state / (np.linalg.norm(post_state) + 1e-12)
+    
+    return post_state
 
 
 # =====================================================
-# FACTORÍA DEL CIRCUITO
+# CIRCUITO PARAMETRIZADO
 # =====================================================
 
-def make_batched_transform(nqubits, nancilla, ndataq, nlayers):
+def apply_pqc_layer(state, params, nqubits):
     """
-    Devuelve una función vectorizada/jit con nqubits, nancilla y nlayers
-    como constantes Python cerradas, evitando TracerBoolConversionError.
+    Aplica una capa del circuito parametrizado.
+    
+    Estructura:
+      1. RX en todos los qubits
+      2. RY en todos los qubits
+      3. CZ entre qubits adyacentes
+    
+    Args:
+        state: vector de estado
+        params: array de shape (2*nqubits,) con ángulos [rx_0, ry_0, rx_1, ry_1, ...]
+        nqubits: número total de qubits
+    
+    Returns:
+        estado transformado
     """
+    # Extrae ángulos
+    rx_angles = params[0::2]  # Índices pares
+    ry_angles = params[1::2]  # Índices impares
+    
+    # Aplica RX en todos los qubits
+    for i in range(nqubits):
+        state = apply_single_qubit_gate(state, RX(rx_angles[i]), i, nqubits)
+    
+    # Aplica RY en todos los qubits
+    for i in range(nqubits):
+        state = apply_single_qubit_gate(state, RY(ry_angles[i]), i, nqubits)
+    
+    # Aplica CZ entre qubits adyacentes
+    for i in range(nqubits - 1):
+        state = apply_two_qubit_gate(state, CZ_gate(), i, i+1, nqubits)
+    
+    return state
 
-    def transform_singlestate(params, mu, current_state, key):
-        c = tc.Circuit(
-            nqubits,
-            inputs=current_state
+
+def transform_state(state, params, mu, nancilla, ndataq, nlayers):
+    """
+    Transforma un estado usando el circuito parametrizado con ancillas.
+    
+    Proceso:
+      1. Prepara ancillas (todas en |0⟩)
+      2. Encoding: RY(μ₁) y RZ(μ₂) en ancillas
+      3. Aplica nlayers capas variacionales
+      4. Mide ancillas y retorna estado de datos
+    
+    Args:
+        state: estado inicial de datos de shape (2**ndataq,)
+        params: parámetros de PQC de shape (nlayers, 2*nqubits)
+        mu: conditioning parameters [μ₁, μ₂]
+        nancilla: número de ancillas
+        ndataq: número de qubits de datos
+        nlayers: número de capas del PQC
+    
+    Returns:
+        estado de datos transformado de shape (2**ndataq,)
+    """
+    nqubits = nancilla + ndataq
+    
+    # Prepara estado con ancillas: |ψ⟩ ⊗ |0⟩^⊗nancilla
+    ancilla = np.zeros(2**nancilla, dtype=np.complex64)
+    ancilla[0] = 1.0
+    full_state = np.kron(state, ancilla)
+    
+    # Encoding en ancillas
+    mu1, mu2 = mu[0], mu[1]
+    for i in range(nancilla):
+        # RY(μ₁) en ancilla i
+        full_state = apply_single_qubit_gate(
+            full_state, 
+            RY(mu1), 
+            ndataq + i, 
+            nqubits
         )
-
-        # encoding en ancillas
-        for i in range(nancilla):
-            c.ry(ndataq + i, theta=mu[0])
-            c.rz(ndataq + i, theta=mu[1])
-
-        # capas variacionales
-        for l in range(nlayers):
-            for i in range(nqubits):
-                c.rx(i, theta=params[l][2 * i])
-                c.ry(i, theta=params[l][2 * i + 1])
-
-            for i in range(nqubits - 1):
-                c.cz(i, i + 1)
-
-        full_state = c.state()
-
-        data_state = measure_ancillas_single(
-            key,
+        # RZ(μ₂) en ancilla i
+        full_state = apply_single_qubit_gate(
             full_state,
-            nancilla,
-            ndataq
+            RZ(mu2),
+            ndataq + i,
+            nqubits
         )
+    
+    # Aplica capas variacionales
+    for layer in range(nlayers):
+        full_state = apply_pqc_layer(full_state, params[layer], nqubits)
+    
+    # Mide ancillas y retorna estado de datos
+    data_state = measure_ancillas_classical(full_state, nancilla, ndataq)
+    
+    return data_state
 
-        return data_state
 
-    return jax.jit(
-        jax.vmap(
-            transform_singlestate,
-            in_axes=(
-                None,   # params
-                None,   # mu
-                0,      # batch states
-                0       # keys
-            )
-        )
-    )
+# =====================================================
+# BATCHED TRANSFORMATION
+# =====================================================
+
+def batched_transform(states, params, mu, nancilla, ndataq, nlayers):
+    """
+    Aplica transform_state a un batch de estados.
+    
+    Args:
+        states: array de shape (nbatch, 2**ndataq)
+        params: parámetros compartidos de shape (nlayers, 2*nqubits)
+        mu: conditioning [μ₁, μ₂]
+        nancilla, ndataq, nlayers: configuración
+    
+    Returns:
+        array de estados transformados de shape (nbatch, 2**ndataq)
+    """
+    transformed = []
+    for state in states:
+        t_state = transform_state(state, params, mu, nancilla, ndataq, nlayers)
+        transformed.append(t_state)
+    return np.array(transformed)
 
 
 # =====================================================
@@ -145,128 +334,255 @@ def make_batched_transform(nqubits, nancilla, ndataq, nlayers):
 # =====================================================
 
 def run_simulation(distribution, mu1, mu2, nstates):
+    """
+    Ejecuta la simulación completa del modelo CQDD.
+    
+    Args:
+        distribution: "Cluster States", "Rings", o "Parallel Rings"
+        mu1, mu2: parámetros de condicionamiento
+        nstates: número de estados a generar
+    
+    Returns:
+        array de estados finales de shape (nstates, 2) con amplitudes [α, β]
+    """
+    
     if distribution not in MODEL_CONFIG:
         raise ValueError(f"Distribución no soportada: {distribution}")
-
+    
     cfg = MODEL_CONFIG[distribution]
     nancilla = cfg["nancilla"]
     ndataq = cfg["ndataq"]
     nqubits = nancilla + ndataq
-
+    
+    # Para anillos paralelos, μ₂ no se usa
     if distribution == "Parallel Rings":
         mu2 = 0.0
-
-    key = jax.random.PRNGKey(0)
-
+    
+    # Carga parámetros entrenados
     params = load_params(distribution)
+    
     if params.ndim != 3:
         raise ValueError(
             f"El tensor de parámetros debe tener shape (T, L, P). "
             f"Recibido: {params.shape}"
         )
-
-    T_local, L_local, P_local = params.shape
-
+    
+    T_steps, L_layers, P_params = params.shape
+    
+    # Valida dimensión de parámetros
     expected_P = 2 * nqubits
-    if P_local != expected_P:
+    if P_params != expected_P:
         raise ValueError(
             f"Mismatch para '{distribution}': "
             f"se esperaba último eje {expected_P} (= 2 * {nqubits}), "
-            f"pero llegó {P_local}. Shape completa: {params.shape}"
+            f"pero llegó {P_params}. Shape completa: {params.shape}"
         )
-
-    transform = make_batched_transform(
-        nqubits=nqubits,
-        nancilla=nancilla,
-        ndataq=ndataq,
-        nlayers=L_local
-    )
-
+    
+    # Inicializa estados aleatorios en la esfera de Bloch
+    key = jax.random.PRNGKey(0)
     key, subkey = jax.random.split(key)
-    states = random_bloch_states(subkey, nstates)
-    states = [states]
-
-    mu = [mu1, mu2]
-
-    for t in range(T_local):
-        key, subkey = jax.random.split(key)
-        keys = jax.random.split(subkey, nstates)
-
-        transformed = transform(
+    
+    # Estados iniciales en 1 qubit (2**ndataq = 2)
+    initial_states_1qubit = random_bloch_states(subkey, nstates)
+    
+    # Itera sobre pasos de denoising
+    current_states = np.array(initial_states_1qubit)
+    
+    for t in range(T_steps):
+        # Convierte amplitudes a vectores de estado para ndataq qubits
+        states_vectors = []
+        for state_2d in current_states:
+            # Para ndataq=1: amplitudes [α, β] es suficiente
+            states_vectors.append(state_2d.astype(np.complex64))
+        states_vectors = np.array(states_vectors)
+        
+        # Aplica transformación
+        mu = [mu1, mu2]
+        transformed_vectors = batched_transform(
+            states_vectors,
             params[t],
             mu,
-            batched_addancilla(states[-1], nancilla),
-            keys
+            nancilla,
+            ndataq,
+            L_layers
         )
-
-        states.append(transformed)
-
-    return states[-1]
+        
+        current_states = transformed_vectors
+    
+    return current_states
 
 
 # =====================================================
-# BLOCH COORDS
+# CONVERSIÓN A COORDENADAS DE BLOCH
 # =====================================================
 
 def states_to_bloch_coords(states):
+    """
+    Convierte estados cuánticos a coordenadas en la esfera de Bloch.
+    
+    Mapeo para 1 qubit:
+        |ψ⟩ = α|0⟩ + β|1⟩ → (x, y, z)
+    
+    donde:
+        x = 2 Re(α* β)
+        y = 2 Im(α* β)
+        z = |α|² - |β|²
+    
+    Args:
+        states: array de shape (nstates, 2) con [α, β]
+    
+    Returns:
+        tuple (xs, ys, zs) - arrays de coordenadas
+    """
     xs, ys, zs = [], [], []
-
-    for vec in states:
-        alpha = complex(vec[0])
-        beta = complex(vec[1])
-
-        x = 2 * np.real(np.conj(alpha) * beta)
-        y = 2 * np.imag(np.conj(alpha) * beta)
-        z = np.abs(alpha) ** 2 - np.abs(beta) ** 2
-
+    
+    for state in states:
+        alpha = complex(state[0])
+        beta = complex(state[1])
+        
+        conj_alpha_beta = np.conj(alpha) * beta
+        
+        x = 2 * np.real(conj_alpha_beta)
+        y = 2 * np.imag(conj_alpha_beta)
+        z = np.abs(alpha)**2 - np.abs(beta)**2
+        
         xs.append(x)
         ys.append(y)
         zs.append(z)
-
+    
     return np.array(xs), np.array(ys), np.array(zs)
 
 
 # =====================================================
-# PLOTLY BLOCH SPHERE
+# VISUALIZACIÓN CON PLOTLY
 # =====================================================
 
 def create_bloch_plotly(states):
+    """
+    Crea visualización interactiva de la esfera de Bloch con Plotly.
+    
+    Args:
+        states: array de shape (nstates, 2) con amplitudes
+    
+    Returns:
+        Figura de Plotly
+    """
+    
     xs, ys, zs = states_to_bloch_coords(states)
-
-    u = np.linspace(0, 2 * np.pi, 50)
-    v = np.linspace(0, np.pi, 50)
-
+    
+    # Genera esfera de Bloch como referencia
+    u = np.linspace(0, 2 * np.pi, 40)
+    v = np.linspace(0, np.pi, 30)
+    
     sphere_x = np.outer(np.cos(u), np.sin(v))
     sphere_y = np.outer(np.sin(u), np.sin(v))
     sphere_z = np.outer(np.ones_like(u), np.cos(v))
-
+    
     fig = go.Figure()
-
+    
+    # Añade esfera de referencia
     fig.add_surface(
         x=sphere_x,
         y=sphere_y,
         z=sphere_z,
         opacity=0.15,
-        showscale=False
+        colorscale='Greys',
+        showscale=False,
+        name='Bloch sphere',
+        hoverinfo='skip'
     )
-
+    
+    # Añade puntos de estados
     fig.add_scatter3d(
         x=xs,
         y=ys,
         z=zs,
-        mode="markers",
-        marker=dict(size=3, color="red")
-    )
-
-    fig.update_layout(
-        scene=dict(
-            xaxis_title="X",
-            yaxis_title="Y",
-            zaxis_title="Z",
-            aspectmode="cube"
+        mode='markers',
+        marker=dict(
+            size=4,
+            color='#00d4ff',
+            opacity=0.85,
+            line=dict(color='#0097b8', width=0.5)
         ),
-        height=700,
-        margin=dict(l=0, r=0, t=0, b=0)
+        name='Quantum states',
+        text=[f"State {i}" for i in range(len(states))],
+        hovertemplate='<b>%{text}</b><br>x: %{x:.3f}<br>y: %{y:.3f}<br>z: %{z:.3f}<extra></extra>'
     )
-
+    
+    # Añade ejes de referencia
+    axis_length = 1.3
+    
+    # Eje X (rojo)
+    fig.add_scatter3d(
+        x=[0, axis_length], y=[0, 0], z=[0, 0],
+        mode='lines',
+        line=dict(color='#ff4f6a', width=3),
+        name='X axis',
+        hoverinfo='skip',
+        showlegend=False
+    )
+    
+    # Eje Y (verde)
+    fig.add_scatter3d(
+        x=[0, 0], y=[0, axis_length], z=[0, 0],
+        mode='lines',
+        line=dict(color='#39d07e', width=3),
+        name='Y axis',
+        hoverinfo='skip',
+        showlegend=False
+    )
+    
+    # Eje Z (azul)
+    fig.add_scatter3d(
+        x=[0, 0], y=[0, 0], z=[0, axis_length],
+        mode='lines',
+        line=dict(color='#0097b8', width=3),
+        name='Z axis',
+        hoverinfo='skip',
+        showlegend=False
+    )
+    
+    # Configura el layout
+    fig.update_layout(
+        title='Bloch Sphere Visualization',
+        scene=dict(
+            xaxis=dict(
+                title='X',
+                backgroundcolor='rgb(13, 17, 23)',
+                gridcolor='rgb(29, 42, 60)',
+                showbackground=True,
+                zerolinecolor='rgb(100, 100, 100)'
+            ),
+            yaxis=dict(
+                title='Y',
+                backgroundcolor='rgb(13, 17, 23)',
+                gridcolor='rgb(29, 42, 60)',
+                showbackground=True,
+                zerolinecolor='rgb(100, 100, 100)'
+            ),
+            zaxis=dict(
+                title='Z',
+                backgroundcolor='rgb(13, 17, 23)',
+                gridcolor='rgb(29, 42, 60)',
+                showbackground=True,
+                zerolinecolor='rgb(100, 100, 100)'
+            ),
+            camera=dict(
+                eye=dict(x=1.5, y=1.5, z=1.3)
+            ),
+            aspectmode='cube'
+        ),
+        height=600,
+        margin=dict(l=0, r=0, b=0, t=40),
+        font=dict(
+            family='JetBrains Mono, monospace',
+            size=11,
+            color='#c8d8e8'
+        ),
+        paper_bgcolor='rgba(13, 17, 23, 0)',
+        plot_bgcolor='rgba(13, 17, 23, 0)',
+        showlegend=True,
+        hovermode='closest'
+    )
+    
     return fig
