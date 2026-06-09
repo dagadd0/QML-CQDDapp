@@ -389,7 +389,20 @@ st.markdown("""
 <div class="cqdd-header">
   <div class="label">Conditioned Quantum Denoising Diffusion</div>
   <h1>CQDD &mdash; Quantum State Generator</h1>
-  <p>PQC-based trained conditioned quantum denoising diffusion model &nbsp;·&nbsp; Bloch sphere visualization</p>
+  <p>
+    PQC-based trained conditioned quantum denoising diffusion model
+    &nbsp;·&nbsp; Bloch sphere visualization
+  </p>
+
+  <p>
+    <a href="https://github.com/dagadd0/QML-CQDDmodel" target="_blank">
+      GitHub Repo CQDD model
+    </a>
+    &nbsp;|&nbsp;
+    <a href="https://github.com/dagadd0/QML-CQDDapp" target="_blank">
+      GitHub Repo CQDD app
+    </a>
+  </p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -436,8 +449,8 @@ with st.sidebar:
         if mu1_mode == "Slider":
             mu1 = st.slider(
                 "μ₁",
-                -1.0,
-                1.0,
+                0.0,
+                np.pi,
                 0.0,
                 step=0.01,
                 key="mu1_sl_parallel",
@@ -445,8 +458,8 @@ with st.sidebar:
         else:
             mu1 = st.number_input(
                 "μ₁",
-                min_value=-1.0,
-                max_value=1.0,
+                min_value=0.0,
+                max_value=np.pi,
                 value=0.0,
                 step=0.01,
                 format="%.3f",
@@ -598,7 +611,7 @@ with col2:
 | Total qubits | {num_qubits} |
 | Denoising steps | T = {num_steps} |
 | PQC layers | L = {num_layers} |
-| μ₁ range | [-1, 1] |
+| μ₁ range | [0, pi] |
 | μ₂ | fixed to 0 |
 | Param tensor | {params.shape} |
 
