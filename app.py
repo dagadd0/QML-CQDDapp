@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 
-from quantum_backend_final import (
+from quantum_backend import (
     run_simulation,
     create_bloch_plotly
 )
