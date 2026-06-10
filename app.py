@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 
-from quantum_backend import (
+from quantum_backend_final import (
     run_simulation,
     create_bloch_plotly
 )
@@ -21,14 +21,14 @@ st.set_page_config(
 # =====================================================
 
 PARAM_FILES = {
-    "Cluster States": "params_clusters.npy",
-    "Rings": "params_rings.npy",
+    "Polar Points": "params_clusters.npy",
+    "Rotated Rings": "params_rings.npy",
     "Parallel Rings": "params_ringsparalel.npy",
 }
 
 MODEL_CONFIG = {
-    "Cluster States": {"nancilla": 2, "ndataq": 1},
-    "Rings": {"nancilla": 3, "ndataq": 1},
+    "Polar Points": {"nancilla": 2, "ndataq": 1},
+    "Rotated Rings": {"nancilla": 3, "ndataq": 1},
     "Parallel Rings": {"nancilla": 3, "ndataq": 1},
 }
 
@@ -40,7 +40,6 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=JetBrains+Mono:wght@300;400;500;600&family=Instrument+Sans:wght@300;400;500&display=swap');
 
-/* ── Root tokens ── */
 :root {
     --bg:       #080c10;
     --bg-card:  #0d1117;
@@ -61,21 +60,18 @@ st.markdown("""
     --serif:    'DM Serif Display', serif;
 }
 
-/* ── Global reset ── */
 html, body, [class*="css"] {
     font-family: var(--sans) !important;
     background-color: var(--bg) !important;
     color: var(--text) !important;
 }
 
-/* ── Hide default Streamlit chrome ── */
 #MainMenu, footer, header { visibility: hidden; }
 .block-container {
     padding: 2rem 2.5rem 3rem !important;
     max-width: 1300px !important;
 }
 
-/* ── Page header ── */
 .cqdd-header {
     border-bottom: 1px solid var(--border);
     padding-bottom: 1.2rem;
@@ -104,7 +100,6 @@ html, body, [class*="css"] {
     font-family: var(--mono);
 }
 
-/* ── Section titles ── */
 .section-title {
     font-family: var(--mono);
     font-size: 0.6rem;
@@ -123,7 +118,6 @@ html, body, [class*="css"] {
     background: var(--border);
 }
 
-/* ── Info / stat cards ── */
 .stat-row {
     display: flex;
     gap: 0.8rem;
@@ -160,7 +154,6 @@ html, body, [class*="css"] {
     margin-left: 0.2em;
 }
 
-/* ── Bloch sphere panel ── */
 .panel {
     background: var(--bg-card);
     border: 1px solid var(--border);
@@ -171,16 +164,6 @@ html, body, [class*="css"] {
     box-shadow: 0 0 40px var(--cyan-glow);
 }
 
-/* ── Circuit panel ── */
-.circuit-panel {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.2rem 1.4rem;
-    margin-bottom: 1rem;
-}
-
-/* ── Expander (model details) ── */
 .streamlit-expanderHeader {
     font-family: var(--mono) !important;
     font-size: 0.72rem !important;
@@ -200,7 +183,6 @@ html, body, [class*="css"] {
     line-height: 1.8 !important;
 }
 
-/* ── Buttons ── */
 .stButton > button {
     font-family: var(--mono) !important;
     font-size: 0.72rem !important;
@@ -227,7 +209,6 @@ html, body, [class*="css"] {
     box-shadow: 0 0 24px rgba(0,212,255,0.3) !important;
 }
 
-/* ── Download button ── */
 .stDownloadButton > button {
     font-family: var(--mono) !important;
     font-size: 0.68rem !important;
@@ -243,7 +224,6 @@ html, body, [class*="css"] {
     color: var(--cyan) !important;
 }
 
-/* ── Sidebar ── */
 section[data-testid="stSidebar"] {
     background: #090d12 !important;
     border-right: 1px solid var(--border) !important;
@@ -262,11 +242,7 @@ section[data-testid="stSidebar"] label {
     color: var(--text) !important;
     letter-spacing: 0.05em !important;
 }
-section[data-testid="stSidebar"] .stSlider [data-baseweb="slider"] {
-    padding-top: 0.3rem;
-}
 
-/* ── Slider track & thumb ── */
 [data-baseweb="slider"] [data-testid="stTickBar"] { display: none; }
 [data-baseweb="slider"] div[role="slider"] {
     background: var(--cyan) !important;
@@ -274,7 +250,6 @@ section[data-testid="stSidebar"] .stSlider [data-baseweb="slider"] {
     box-shadow: 0 0 8px var(--cyan-glow) !important;
 }
 
-/* ── Select box ── */
 [data-baseweb="select"] div {
     background: var(--bg-card) !important;
     border-color: var(--border) !important;
@@ -283,14 +258,12 @@ section[data-testid="stSidebar"] .stSlider [data-baseweb="slider"] {
     font-size: 0.75rem !important;
 }
 
-/* ── Radio buttons ── */
 .stRadio label {
     font-family: var(--mono) !important;
     font-size: 0.72rem !important;
     color: var(--text) !important;
 }
 
-/* ── Text inputs ── */
 .stTextInput input, .stNumberInput input {
     background: var(--bg-card) !important;
     border: 1px solid var(--border) !important;
@@ -304,7 +277,6 @@ section[data-testid="stSidebar"] .stSlider [data-baseweb="slider"] {
     box-shadow: 0 0 0 2px var(--cyan-glow) !important;
 }
 
-/* ── Alerts ── */
 .stAlert {
     background: var(--bg-card) !important;
     border-radius: 6px !important;
@@ -318,15 +290,12 @@ div[data-testid="stWarningMessage"] {
     border-left: 3px solid var(--amber) !important;
 }
 
-/* ── Spinner ── */
 .stSpinner > div {
     border-top-color: var(--cyan) !important;
 }
 
-/* ── Divider ── */
 hr { border-color: var(--border) !important; margin: 1.2rem 0 !important; }
 
-/* ── Param shape badge ── */
 .shape-badge {
     display: inline-flex;
     gap: 0.4rem;
@@ -389,18 +358,14 @@ st.markdown("""
 <div class="cqdd-header">
   <div class="label">Conditioned Quantum Denoising Diffusion</div>
   <h1>CQDD &mdash; Quantum State Generator</h1>
+  <p>PQC-based trained conditioned quantum denoising diffusion model &nbsp;·&nbsp; Bloch sphere visualization</p>
   <p>
-    PQC-based trained conditioned quantum denoising diffusion model
-    &nbsp;·&nbsp; Bloch sphere visualization
-  </p>
-
-  <p>
-    <a href="https://github.com/dagadd0/QML-CQDDmodel" target="_blank">
-      GitHub Repo CQDD model
+    <a href="https://github.com/dagadd0/QML-CQDDmodel" target="_blank" style="color:#00d4ff">
+      GitHub: CQDD Model
     </a>
     &nbsp;|&nbsp;
-    <a href="https://github.com/dagadd0/QML-CQDDapp" target="_blank">
-      GitHub Repo CQDD app
+    <a href="https://github.com/dagadd0/QML-CQDDapp" target="_blank" style="color:#00d4ff">
+      GitHub: CQDD App
     </a>
   </p>
 </div>
@@ -417,7 +382,7 @@ with st.sidebar:
 
     distribution = st.selectbox(
         "Target distribution",
-        ["Cluster States", "Rings", "Parallel Rings"]
+        ["Polar Points", "Rotated Rings", "Parallel Rings"]
     )
 
     params_file = PARAM_FILES[distribution]
@@ -443,7 +408,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Conditioning parameters")
 
-    if distribution == "Parallel Rings":
+    if distribution == "Parallel Rings" or distribution == "Rotated Rings":
         mu1_mode = st.radio("μ₁ input", ["Slider", "Manual"], horizontal=True)
 
         if mu1_mode == "Slider":
@@ -593,45 +558,16 @@ with col1:
 with col2:
     st.markdown('<div class="section-title">Variational quantum circuit (PQC)</div>', unsafe_allow_html=True)
 
-    st.image("circuit.png", use_container_width=True)
+    try:
+        st.image("circuit.png", use_container_width=True)
+    except:
+        st.info("Circuit diagram not available")
 
     st.markdown('<div style="margin-top:1rem"></div>', unsafe_allow_html=True)
 
     with st.expander("Model details  ↗", expanded=False):
-        if distribution == "Parallel Rings":
-            st.markdown(
-                f"""
-**System configuration**
-
-| Parameter | Value |
-|---|---|
-| Target distribution | {distribution} |
-| Data qubit | {num_dataq} |
-| Ancillas | {num_ancillas} |
-| Total qubits | {num_qubits} |
-| Denoising steps | T = {num_steps} |
-| PQC layers | L = {num_layers} |
-| μ₁ range | [0, pi] |
-| μ₂ | fixed to 0 |
-| Param tensor | {params.shape} |
-
----
-
-**Circuit description**
-
-A parameterized quantum circuit (PQC) evolves a random distribution of data qubits toward the selected target distribution.
-
-At each timestep *t*:
-
-1. Ancillas are initialized and rotated via μ₁ and μ₂  
-2. A variational block of L = {num_layers} layers is applied (RX → RY → CZ entanglement)  
-3. Ancillas are measured and discarded  
-4. The system evolves toward the target distribution
-"""
-            )
-        else:
-            st.markdown(
-                f"""
+        st.markdown(
+            f"""
 **System configuration**
 
 | Parameter | Value |
@@ -657,7 +593,7 @@ At each timestep *t*:
 3. Ancillas are measured and discarded  
 4. The system evolves toward the target distribution
 """
-            )
+        )
 
     st.markdown('<div style="margin-top:1rem"></div>', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Trained parameters</div>', unsafe_allow_html=True)
